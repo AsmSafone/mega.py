@@ -160,8 +160,7 @@ class Mega:
         self.sequence_num += 1
 
         if self.sid:
-            params.update({'sid': self.sid})
-
+            params['sid'] = self.sid
         # ensure input data is a list
         if not isinstance(data, list):
             data = [data]
@@ -204,13 +203,12 @@ class Mega:
         elif '!' in url:
             # V1 URL structure
             match = re.findall(r'/#!(.*)', url)
-            path = match[0]
-            return path
+            return match[0]
         else:
             raise RequestError('Url key missing')
 
     def _process_file(self, file, shared_keys):
-        if file['t'] == 0 or file['t'] == 1:
+        if file['t'] in [0, 1]:
             keys = dict(
                 keypart.split(':', 1) for keypart in file['k'].split('/')
                 if ':' in keypart)
@@ -306,11 +304,13 @@ class Mega:
         for foldername in paths:
             if foldername != '':
                 for file in files.items():
-                    if (file[1]['a'] and file[1]['t']
-                            and file[1]['a']['n'] == foldername):
-                        if parent_desc == file[1]['p']:
-                            parent_desc = file[0]
-                            found = True
+                    if (
+                        file[1]['a']
+                        and file[1]['t']
+                        and file[1]['a']['n'] == foldername
+                    ) and parent_desc == file[1]['p']:
+                        parent_desc = file[0]
+                        found = True
                 if found:
                     found = False
                 else:
@@ -384,16 +384,15 @@ class Mega:
         Get a file public link from given file object
         """
         file = file[1]
-        if 'h' in file and 'k' in file:
-            public_handle = self._api_request({'a': 'l', 'n': file['h']})
-            if public_handle == -11:
-                raise RequestError("Can't get a public link from that file "
-                                   "(is this a shared file?)")
-            decrypted_key = a32_to_base64(file['key'])
-            return (f'{self.schema}://{self.domain}'
-                    f'/#!{public_handle}!{decrypted_key}')
-        else:
+        if 'h' not in file or 'k' not in file:
             raise ValidationError('File id and key must be present')
+        public_handle = self._api_request({'a': 'l', 'n': file['h']})
+        if public_handle == -11:
+            raise RequestError("Can't get a public link from that file "
+                               "(is this a shared file?)")
+        decrypted_key = a32_to_base64(file['key'])
+        return (f'{self.schema}://{self.domain}'
+                f'/#!{public_handle}!{decrypted_key}')
 
     def _node_data(self, node):
         try:
@@ -406,20 +405,18 @@ class Mega:
             file = file[1]
         except (IndexError, KeyError):
             pass
-        if 'h' in file and 'k' in file:
-            public_handle = self._api_request({'a': 'l', 'n': file['h']})
-            if public_handle == -11:
-                raise RequestError("Can't get a public link from that file "
-                                   "(is this a shared file?)")
-            decrypted_key = a32_to_base64(file['shared_folder_key'])
-            return (f'{self.schema}://{self.domain}'
-                    f'/#F!{public_handle}!{decrypted_key}')
-        else:
+        if 'h' not in file or 'k' not in file:
             raise ValidationError('File id and key must be present')
+        public_handle = self._api_request({'a': 'l', 'n': file['h']})
+        if public_handle == -11:
+            raise RequestError("Can't get a public link from that file "
+                               "(is this a shared file?)")
+        decrypted_key = a32_to_base64(file['shared_folder_key'])
+        return (f'{self.schema}://{self.domain}'
+                f'/#F!{public_handle}!{decrypted_key}')
 
     def get_user(self):
-        user_data = self._api_request({'a': 'ug'})
-        return user_data
+        return self._api_request({'a': 'ug'})
 
     def get_node_by_type(self, type):
         """
@@ -439,12 +436,7 @@ class Mega:
         """
         Get all files in a given target, e.g. 4=trash
         """
-        if type(target) == int:
-            # convert special nodes (e.g. trash)
-            node_id = self.get_node_by_type(target)
-        else:
-            node_id = [target]
-
+        node_id = self.get_node_by_type(target) if type(target) == int else [target]
         files = self._api_request({'a': 'f', 'c': 1})
         files_dict = {}
         shared_keys = {}
@@ -458,8 +450,7 @@ class Mega:
     def get_id_from_public_handle(self, public_handle):
         # get node data
         node_data = self._api_request({'a': 'f', 'f': 1, 'p': public_handle})
-        node_id = self.get_id_from_obj(node_data)
-        return node_id
+        return self.get_id_from_obj(node_data)
 
     def get_id_from_obj(self, node_data):
         """
@@ -556,9 +547,7 @@ class Mega:
 
         # make a list of json
         if files != {}:
-            post_list = []
-            for file in files:
-                post_list.append({"a": "d", "n": file, "i": self.request_id})
+            post_list = [{"a": "d", "n": file, "i": self.request_id} for file in files]
             return self._api_request(post_list)
 
     def download(self, file, dest_path=None, dest_filename=None):
@@ -583,11 +572,7 @@ class Mega:
 
     def export(self, path=None, node_id=None):
         nodes = self.get_files()
-        if node_id:
-            node = nodes[node_id]
-        else:
-            node = self.find(path)
-
+        node = nodes[node_id] if node_id else self.find(path)
         node_data = self._node_data(node)
         is_file_node = node_data['t'] == 0
         if is_file_node:
@@ -693,18 +678,14 @@ class Mega:
         attribs = base64_url_decode(file_data['at'])
         attribs = decrypt_attr(attribs, k)
 
-        if dest_filename is not None:
-            file_name = dest_filename
-        else:
-            file_name = attribs['n']
-
+        file_name = dest_filename if dest_filename is not None else attribs['n']
         input_file = requests.get(file_url, stream=True).raw
 
         if dest_path is None:
             dest_path = ''
         else:
             dest_path += '/'
-        
+
         # Download Status message of MegaDL-Bot
         if statusdl_msg is not None:
             dlstats_msg = statusdl_msg
@@ -749,7 +730,7 @@ class Mega:
                 file_info = os.stat(temp_output_file.name)
                 # Edit status message
                 percentage = file_info.st_size * 100 / file_size
-                
+
                 progress = "`[{0}{1}]` \n".format(
                   ''.join(["●" for i in range(math.floor(percentage / 5))]),
                   ''.join(["○" for i in range(20 - math.floor(percentage / 5))])
@@ -760,7 +741,18 @@ class Mega:
                 )
 
                 try:
-                  dlstats_msg.edit(f"**Downloading...** {ok} \n{progress} \n➩ **Name** : `{file_name}` \n➩ **Done** : `{humanize.naturalsize(file_info.st_size)}` \n➩ **Total** : `{humanize.naturalsize(file_size)}`\n\n**@AsmSafone | @AsmSupport**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel Mega DL", callback_data="cancel_mega")]]))
+                  dlstats_msg.edit(f"""\n
+╭───[**🔅Progress Bar🔅**]───⍟
+│
+├<b>📂 **File Name**: `{file_name}` </b>
+│
+├<b>✅ **Done** : `{humanize.naturalsize(file_info.st_size)}`</b>
+│
+├<b>🗂 **Total** : `{humanize.naturalsize(file_size)}</b>
+│
+├<b>📥 {progress}</b>
+│
+╰─────────[😊]──────⍟""", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel Mega DL", callback_data="cancel_mega")]]))
                   logger.info('%s of %s downloaded', file_info.st_size,
                             file_size)
                 except MessageNotModified:
@@ -798,7 +790,6 @@ class Mega:
                 128, initial_value=((ul_key[4] << 32) + ul_key[5]) << 64)
             aes = AES.new(k_str, AES.MODE_CTR, counter=count)
 
-            upload_progress = 0
             completion_file_handle = None
 
             mac_str = '\0' * 16
@@ -806,6 +797,7 @@ class Mega:
                                     mac_str.encode("utf8"))
             iv_str = a32_to_str([ul_key[4], ul_key[5], ul_key[4], ul_key[5]])
             if file_size > 0:
+                upload_progress = 0
                 for chunk_start, chunk_size in get_chunks(file_size):
                     chunk = input_file.read(chunk_size)
                     upload_progress += len(chunk)
@@ -888,8 +880,7 @@ class Mega:
         encrypt_attribs = base64_url_encode(encrypt_attr(attribs, ul_key[:4]))
         encrypted_key = a32_to_base64(encrypt_key(ul_key[:4], self.master_key))
 
-        # update attributes
-        data = self._api_request({
+        return self._api_request({
             'a':
             'p',
             't':
@@ -903,7 +894,6 @@ class Mega:
             'i':
             self.request_id
         })
-        return data
 
     def _root_node_id(self):
         if not hasattr(self, 'root_id'):
@@ -919,10 +909,7 @@ class Mega:
                 folder_node_ids[idx] = existing_node_id
                 continue
             if idx == 0:
-                if dest is None:
-                    parent_node_id = self._root_node_id()
-                else:
-                    parent_node_id = dest
+                parent_node_id = self._root_node_id() if dest is None else dest
             else:
                 parent_node_id = folder_node_ids[idx - 1]
             created_node = self._mkdir(name=directory_name,
@@ -1052,8 +1039,7 @@ class Mega:
         unencrypted_attrs = decrypt_attr(base64_url_decode(data['at']), k)
         if not unencrypted_attrs:
             return None
-        result = {'size': size, 'name': unencrypted_attrs['n']}
-        return result
+        return {'size': size, 'name': unencrypted_attrs['n']}
 
     def import_public_file(self,
                            file_handle,
